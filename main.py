@@ -8,6 +8,74 @@ import secrets
 import os
 from datetime import datetime, timedelta
 
+# ... (mantenha os imports anteriores)
+# ADICIONE ESTE IMPORT NO TOPO:
+from fastapi import File, UploadFile, Form
+
+# ... (configurações de email iguais)
+
+# ARQUIVOS NA NUVEM
+ARQUIVO_DADOS = "faturamento_nuvem.csv"
+ARQUIVO_USUARIOS = "usuarios_nuvem.xlsx" # Novo arquivo
+
+# ... (mantenha as funções de email e banco de tokens)
+
+# --- NOVA LÓGICA DE LOGIN ---
+@app.post("/1-login-senha")
+def passo1_login(dados: LoginRequest):
+    # Verifica se o arquivo de usuários existe
+    if not os.path.exists(ARQUIVO_USUARIOS):
+        raise HTTPException(status_code=500, detail="Arquivo de usuários não sincronizado ainda.")
+
+    try:
+        # Lê o Excel de usuários
+        df_users = pd.read_excel(ARQUIVO_USUARIOS)
+        
+        # Procura o usuário (assumindo colunas 'email' e 'senha')
+        # Limpa espaços em branco que podem ter ficado no Excel
+        usuario_encontrado = df_users[df_users['email'].str.strip() == dados.email.strip()]
+        
+        if usuario_encontrado.empty:
+            raise HTTPException(status_code=401, detail="Usuário não cadastrado")
+            
+        senha_correta = str(usuario_encontrado.iloc[0]['senha']).strip()
+        
+        if dados.senha.strip() != senha_correta:
+            raise HTTPException(status_code=401, detail="Senha incorreta")
+            
+        # Se passou, continua o fluxo normal do código (gerar token e email)
+        codigo = secrets.token_hex(3).upper()
+        codigos_otp[dados.email] = codigo
+        enviar_email_codigo(dados.email, codigo) # Função que já criamos antes
+        
+        return {"mensagem": "Senha correta! Código enviado por e-mail."}
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao ler usuários: {str(e)}")
+
+
+# --- NOVA ROTA DE ATUALIZAÇÃO (Recebe 2 arquivos agora) ---
+@app.post("/atualizar-tudo")
+def receber_arquivos(
+    file_dados: UploadFile = File(...), 
+    file_users: UploadFile = File(...), 
+    senha_admin: str = Form(...)
+):
+    if senha_admin != "senha_super_secreta_do_script":
+        raise HTTPException(status_code=401, detail="Não autorizado")
+    
+    # Salva o Faturamento
+    with open(ARQUIVO_DADOS, "wb") as buffer:
+        buffer.write(file_dados.file.read())
+        
+    # Salva os Usuários
+    with open(ARQUIVO_USUARIOS, "wb") as buffer:
+        buffer.write(file_users.file.read())
+        
+    return {"status": "Faturamento e Usuários atualizados com sucesso!"}
+
+# ... (Mantenha o resto das rotas igual)
+
 app = FastAPI(title="API Faturamento Segura")
 
 # --- CONFIGURAÇÕES (Use variáveis de ambiente na vida real) ---
@@ -111,4 +179,5 @@ def ler_dados(usuario: str = Depends(pegar_usuario_logado)):
         df = pd.read_csv(ARQUIVO_TEMPORARIO, sep=";", encoding="utf-8-sig")
         return df.to_dict(orient="records")
     except Exception as e:
+
         return {"erro": str(e)}
